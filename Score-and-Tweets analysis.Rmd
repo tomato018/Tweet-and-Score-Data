@@ -1,0 +1,220 @@
+---
+title: "Option B-Mystery Unit"
+author: "Meijuan Zeng"
+date: "2019/5/7"
+output: html_document
+---
+
+## Option B
+
+User Portrait: Teachers
+
+Description: The intervention aims to help teachers know about students' emotion status through tweets and their social network, as well as their learning performances, so that teachers know how to adapt to their course instructions to improve students' learning engagement and performances in class.
+
+Main intervention: use wordcloud and sentiment analysis graph to help teachers figure out students' tweets comments and attitudes over 6 weeks; use social networked analysis to see which group of students performed active discussions with the classmates???use correlation plot to find out the relationship among students' learning performance, time completion, and avarage sentiment scores. 
+
+Intervention rationale: NLP and Social Networked Analysis 
+Visualization: Wordcloud, sentimental analysis in ggplot, SNA graph, correlation plot, and loop closing by sending an notification email.
+
+Supported references:
+https://content.sciendo.com/view/journals/eurodl/18/2/article-p74.xml 
+
+```{r setup, include=FALSE}
+library(tm)
+library(SnowballC)
+library(wordcloud)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(topicmodels)
+library(syuzhet)
+
+#IF USING A MAC PLEASE RUN THIS CODE
+Sys.setlocale("LC_ALL", "C")
+```
+
+## Tweets Analysis 
+
+### Import tweets data
+```{r}
+Tweets <- read.csv('tweets.csv',header= TRUE)
+Tweets <- arrange(Tweets, week)
+```
+
+### Remove hashtag, urls, and other special characters in the text
+```{r}
+Tweets$tweet2 <- gsub("@[A-Za-z0-9]+", "", Tweets$tweet)
+Tweets$tweet2 <- gsub("http.*","", Tweets$tweet2)
+Tweets$tweet2 <- gsub("[^0-9A-Za-z \t]","", Tweets$tweet2)
+Tweets$tweet2 <- gsub("\\w+:\\//\\//\\S+","", Tweets$tweet2)
+Tweets <- Tweets[,-4]
+Reply <- filter(Tweets, reply != 'NA')
+Noreply <- filter(Tweets, is.na(Tweets$reply))
+```
+
+### Process text using the tm package: Alternative processing. 
+```{r}
+#Convert the data frame to the corpus format that the tm package uses
+corpus <- Corpus(VectorSource(Tweets$tweet2))
+#Remove spaces
+corpus <- tm_map(corpus, stripWhitespace)
+#Convert to lower case
+corpus <- tm_map(corpus, content_transformer(tolower)) 
+#Remove pre-defined stop words ('the', 'a', etc)
+corpus <- tm_map(corpus, removeWords, stopwords('english'))
+#Convert words to stems ("education" = "edu") for analysis, for more info see  http://tartarus.org/~martin/PorterStemmer/
+corpus <- tm_map(corpus, stemDocument)
+#Remove numbers
+corpus <- tm_map(corpus, removeNumbers, lazy=TRUE)
+#remove punctuation
+corpus <- tm_map(corpus, removePunctuation, lazy=TRUE)
+
+#Convert corpus to a term document matrix - so each word can be analyzed individuallly
+tdm.corpus <- TermDocumentMatrix(corpus)
+
+#Note: we won't remove plural words here, plural words in English tend to be highly irregular and difficult to extract reliably
+
+```
+
+### Generate a Word Cloud
+```{r}
+#We can also create a vector of the word frequencies
+word.count <- sort(rowSums(as.matrix(tdm.corpus)), decreasing=TRUE)
+word.count <- data.frame(word.count)
+#Define the colors the cloud will use
+col=brewer.pal(6,"Dark2")
+#Generate cloud
+wordcloud(corpus, min.freq=10, scale=c(5,2),rot.per = 0.25,
+          random.color=T, random.order=F,colors=col)
+
+#From the wordcloud below, we can see some frequent emotional words: "good","love","hate","lol",and "fail". Although these words may not reflect students' discussion about course contents and attitudes towards the class, it is still necessary for teachers to know about students' emotion status via tweets. Therefore, sentiment analysis is necessary to be done. 
+```
+
+## Sentiment Analysis
+
+### Get sentiment score for each tweet
+```{r}
+word.df <- as.vector(Tweets$tweet2)
+emotion.df <- get_nrc_sentiment(word.df)
+emotion.df2 <-cbind(Tweets$tweet2, emotion.df)
+colnames(emotion.df2)[1] <- 'tweet2'
+```
+
+### Extract sentiment score for each of the tweets
+```{r}
+#Calculate positive and negative sentiment scores for each tweet
+sent.value <- get_sentiment(word.df)
+sent.value <- as.data.frame(sent.value)
+names(sent.value) <- 'overall_score'
+emotion.df3 <- cbind(emotion.df2,sent.value)
+```
+
+### Segregating positive and negative tweets
+```{r}
+positive.tweets<-word.df[sent.value >0]
+negative.tweets<-word.df[sent.value <0]
+category_senti <- ifelse(sent.value <0, "Negative", ifelse(sent.value > 0, "Positive", "Neutral"))
+colnames(category_senti) <- 'status'
+table(category_senti)
+#We can see that there are total of 266 negative posts, 271 neutral posts, and 460 positive posts. Of 997 tweets, only 46% shows positive status, 27% shows neutural and 26% shows negative status. 
+```
+
+## Visualizing the sum of sentimental scores over weeks
+```{r}
+emotion.df3 <- cbind(emotion.df3, category_senti)
+emotion.df4 <- left_join(Tweets,emotion.df3,by = 'tweet2')
+emotion.df5 <- dplyr::select(emotion.df4, 'id','week','overall_score')%>%na.omit()
+emotion.df6 <- emotion.df5%>%group_by(week)%>%summarise(total_score=sum(overall_score))
+ggplot(emotion.df6,aes(week,total_score,label=total_score))+geom_col() +geom_text()+labs(title = "Change of the Sentiment Score Over Time", x= "Week", y= "Total Sentiment Score")+theme_classic()
+
+#Below is the graph which shows total sentiment score over 6 weeks. Week 2 has the highest sentiment score while week 6 has the lowest (63.25 vs 15.05), indicating that there may be more positive posts in week 2 while more negative posts in week 6. Although the students' tweets look subjective, the emotions behind the students' tweets can still be used as a good reference for the teacher to improve the course preperation for better engagement in class. 
+```
+
+##Social Network Analysis
+
+###Use social network analysis to show the interactions among the students
+
+```{r}
+library(igraph)
+EDGE <- Reply %>% dplyr::select(id,reply)%>%count(id,reply)
+names(EDGE) <- c('from','to','count')
+Total_EDGE <- EDGE %>% group_by(to) %>% summarize(count = sum(count))
+names(Total_EDGE) <- c('id','count')
+
+emotion.df11 <- filter(emotion.df4, !is.na(emotion.df4$reply))
+V <- emotion.df11%>%dplyr::select(reply,overall_score)
+names(V) <- c('id','score')
+V <- V%>% group_by(id) %>% summarise(total_score=sum(score))
+V1 <- full_join(V, Total_EDGE, by='id')
+
+g <- graph.data.frame(EDGE, directed=TRUE, vertices=V1)
+g <- simplify(g, remove.multiple = TRUE, remove.loops = TRUE)
+plot(g,layout=layout.fruchterman.reingold, 
+     vertex.color=V1$id, 
+     edge.arrow.size = 0.1,
+     edge.width= EDGE$count,vertex.size = V1$count, main="Tweets replies among a class") 
+
+#Measures centrality
+degree(g)
+which.max(degree(g)) #PADP0 has the highest degree centrality
+
+#Measures betweeness
+betweenness(g)
+which.max(betweenness(g))#PADP0 has the highest betweeness 
+
+#From the social network visualization, we can see which people are the most popular by having the most tweets replies given by other students. From centrality and betweeness measures, we can see that #PADP0 receives and sent the most tweets. Professor can know how to group their students about course activities or assignments based on students' interaction and their class performance. 
+```
+
+###What are the correlations between tweets sentiment and students' learning performances?
+
+```{r}
+
+scores <- read.csv('scores.csv',header=TRUE)
+score <- scores[,c(1,5,8,11,14,17,20,21)]%>%gather('week','score',2:7)
+score$week <- gsub("score", "",score$week)
+time <- scores[,c(1,4,7,10,13,16,19)]%>%gather('week','time',2:7)
+time$week <- gsub("minutes.", "",time$week)
+
+#Here I change time completion from minutes to hours. The new_df shows each student's average time completion on course unit per week, average course score and sentiment score over weeks and final score for this class.
+
+new_df <-merge(time, score)%>% group_by(id)%>% mutate(time = time/60)%>% summarise(avg_time=mean(time),avg_score=mean(score),final.score=mean(final.score))
+Tweets1 <- emotion.df4 %>% group_by(id) %>%summarise(avg_sentimentscore = mean(overall_score))
+new_df <- inner_join(new_df,Tweets1, by = 'id')
+
+library(corrplot)
+df <- new_df[,-1]
+COR1 <- cor(df)
+corrplot(COR1, order="AOE", method="circle", tl.pos="lt", type="upper",        
+tl.col="black", tl.cex=0.6, tl.srt=45, 
+        addCoef.col="black", addCoefasPercent = TRUE,
+        sig.level=0.50, insig = "blank")
+ggplot(new_df,aes(avg_sentimentscore,final.score))+geom_point() + geom_smooth(method ='lm',se=FALSE)
+model <- lm(final.score ~ avg_sentimentscore, new_df)
+summary(model)
+#Clearly we can see that there is a significantly strong positive correlation between individuals' avearge tweet sentiment score and their final score over weeks. If students' emotion is more positive, they will be more likely to perform well on their final exam. Teachers can use this correlation to make their class more interesting so that students are motivated to learn well. 
+
+```
+
+###Loop closing: sending an auto email for those who did not do well on this course.
+```{r}
+library(sendmailR)
+library(cronR)
+
+#If students' final score or average score is below 0.6, they may receive additional support from the teacher. An auto email will be sent as an alert. 
+if(new_df$final.score < 0.6|new_df$avg_score<0.6){
+  sendmail_options(smtpServer="ASPMX.L.GOOGLE.COM")
+  address <- as.character("email_list$email_address")
+  address <- paste("<", address, ">", sep = "")
+
+
+  from <- "<Instructor's email address>"
+  to <- address
+  subject <- "We need to talk!"
+  body <- c(
+    "Please schedule an appointment with me and see how I can help you improve your course grade!"
+    )
+
+  sendmail(from, to, subject, body)
+}
+```
+
