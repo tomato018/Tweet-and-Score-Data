@@ -27,3 +27,6 @@ Explanation:
 Supported references:
 (https://content.sciendo.com/view/journals/eurodl/18/2/article-p74.xml)
 
+## Author
+
+[Meijuan Zeng](https://github.com/tomato018), MS Student in Learning Analytics at Columbia University
